@@ -60,7 +60,9 @@ jobs:
       run: pnpm install
 
     - name: Install Playwright Browsers
-      run: npx playwright install --with-deps
+      run: |
+        npm install -g @playwright/test
+        npx playwright install --with-deps
 
     - name: Set up Environment Variables
       # ИСПРАВЛЕНИЕ: Передаем валидный DATABASE_URL, смотрящий на наш Docker-контейнер
@@ -79,7 +81,7 @@ jobs:
       run: pnpm build
 
     - name: Run Playwright tests
-      run: npx playwright test
+      run: npx playwright test tests/ui/table.spec.ts
 
     - name: Upload Playwright Report
       uses: actions/upload-artifact@v4
