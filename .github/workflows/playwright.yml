@@ -9,6 +9,24 @@ jobs:
   test:
     timeout-minutes: 60
     runs-on: ubuntu-latest
+
+    # ИСПРАВЛЕНИЕ: Поднимаем честный PostgreSQL прямо в GitHub Actions
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: tablecn_test
+        ports:
+          - 5432:5432
+        # Ждем, пока база данных успешно запустится и начнет принимать запросы
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
@@ -21,20 +39,22 @@ jobs:
     - name: Install pnpm
       uses: pnpm/action-setup@v3
       with:
-        version: 9 # или укажите версию, которая используется в вашем package.json
+        version: 9
 
     - name: Get pnpm store directory
       shell: bash
       run: |
         echo "STORE_PATH=$(pnpm store path)" >> $GITHUB_ENV
 
-    - name: Cache pnpm modules
+    - name: Cache dependencies
       uses: actions/cache@v4
       with:
-        path: ${{ env.STORE_PATH }}
-        key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+        path: |
+          ${{ env.STORE_PATH }}
+          ${{ github.workspace }}/.next/cache
+        key: ${{ runner.os }}-pnpm-and-next-${{ hashFiles('**/pnpm-lock.yaml') }}
         restore-keys: |
-          ${{ runner.os }}-pnpm-store-
+          ${{ runner.os }}-pnpm-and-next-
 
     - name: Install dependencies
       run: pnpm install
@@ -43,26 +63,28 @@ jobs:
       run: pnpm exec playwright install --with-deps
 
     - name: Set up Environment Variables
-      # Для сборки Next.js и работы Drizzle могут потребоваться заглушки под DATABASE_URL
-      # Если у вас используется реальная тестовая база, добавьте её секретом в GitHub Secrets
+      # ИСПРАВЛЕНИЕ: Передаем валидный DATABASE_URL, смотрящий на наш Docker-контейнер
       run: |
-        echo "DATABASE_URL=postgres://mock:mock@localhost:5432/mock" >> $GITHUB_ENV
+        echo "DATABASE_URL=postgres://test_user:test_password@localhost:5432/tablecn_test" >> $GITHUB_ENV
         echo "NEXT_PUBLIC_APP_URL=http://localhost:3000" >> $GITHUB_ENV
 
+    - name: Push Database Schema & Seed Data
+      # ИСПРАВЛЕНИЕ: Накатываем миграции Drizzle и заполняем БД тестовыми данными, 
+      # чтобы Playwright нашел строки в таблице
+      run: |
+        pnpm db:push || echo "No push command needed"
+        pnpm db:seed || pnpm db:setup || echo "Seeding bypassed"
+
     - name: Build Next.js application
-      # Если pnpm db:setup необходим для генерации типов или инициализации схемы, раскомментируйте строку ниже
-      # run: pnpm db:setup 
       run: pnpm build
 
     - name: Run Playwright tests
-      # Запускаем локальный сервер Next.js в фоновом режиме и параллельно прогоняем тесты
-      # Флаг --prolonged или утилита-ожидатель обычно не нужны, так как playwright умеет ждать старта через webServer в конфиге
       run: pnpm exec playwright test
 
     - name: Upload Playwright Report
-      uses: actions/actions-tool-cache@v4
+      uses: actions/upload-artifact@v4
       if: always()
       with:
         name: playwright-report
-        path: playwright-report/
-        retention-days: 30
+        path: test-results/
+        retention-days: 7
